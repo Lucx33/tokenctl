@@ -595,7 +595,7 @@ function tbl(rows, keyName){
 function drawAll(anim){ drawDaily(anim); drawPeriod(); drawHeat(anim);
   if (window.__data){
     drawHbar('model-chart', window.__data.by_model, 'cost','model', fmtU,'accent', anim);
-    drawHbar('proj-chart', window.__data.by_project, 'cost','project', fmtU,'alt', anim);
+    drawHbar('proj-chart', window.__data.by_project, 'cost','project', fmtU,'accent', anim);
   }
 }
 addEventListener('resize', () => drawAll(false));   // resize redesenha instantâneo
@@ -605,12 +605,17 @@ function animateNum(el, from, to, fmt, ms){
   if (!el) return;
   ms = ms || 850;
   if (Math.abs(to-from) < 1e-9){ el.textContent = fmt(to); return; }
-  const t0 = performance.now(), ease = x => 1-Math.pow(1-x,3);
-  (function step(now){
+  el.textContent = fmt(from);            // valor inicial já visível
+  let t0 = null;
+  const ease = x => 1-Math.pow(1-x,3);
+  // o relógio começa no 1º frame REAL (não na chamada): evita "pular" a animação
+  // quando o primeiro frame demora a sair, ex. logo após um F5/carregamento.
+  requestAnimationFrame(function step(now){
+    if (t0 === null) t0 = now;
     const p = Math.min(1, (now-t0)/ms);
     el.textContent = fmt(from + (to-from)*ease(p));
     if (p < 1) requestAnimationFrame(step);
-  })(performance.now());
+  });
 }
 
 /* count-up reaproveitável: guarda o último valor por chave e anima dele até o
@@ -633,13 +638,17 @@ function cancelChart(key){
 function animateChart(key, ms, draw, done){
   cancelChart(key);
   ms = ms || 850;
-  const t0 = performance.now(), ease = x => 1-Math.pow(1-x,3);
-  (function step(now){
+  const ease = x => 1-Math.pow(1-x,3);
+  draw(0);                               // estado inicial (barras zeradas) já visível
+  let t0 = null;
+  // relógio começa no 1º frame REAL, para a animação não "pular" após um F5.
+  chartAnims[key] = requestAnimationFrame(function step(now){
+    if (t0 === null) t0 = now;
     const p = Math.min(1, (now-t0)/ms);
     draw(ease(p));
     if (p < 1) chartAnims[key] = requestAnimationFrame(step);
     else { delete chartAnims[key]; if (done) done(); }
-  })(performance.now());
+  });
 }
 
 /* ---------- onboarding: tela de quem ainda não tem nenhum dado ---------- */
