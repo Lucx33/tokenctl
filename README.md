@@ -18,6 +18,21 @@ pra ver o quanto o plano está rendendo. O dashboard se **atualiza sozinho**: o
 backend reparseia os dados a cada request e o front faz *polling* automático
 (indicador "● live" no header), então novos usos aparecem sem reiniciar nada.
 
+## Demonstração
+
+Tour da aplicação: [`assets/tour.mp4`](assets/tour.mp4) (clique para assistir).
+
+<video src="assets/tour.mp4" controls width="820"></video>
+
+<p align="center">
+  <img src="assets/screenshot-desktop.png" alt="Dashboard do tokenctl" width="820">
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-onboarding.png" alt="Tela inicial, sem dados" width="430">
+  <img src="assets/screenshot-mobile.png" alt="Layout no celular" width="200">
+</p>
+
 ## Segurança e privacidade
 
 **100% local, sem telemetria.** O `tokenctl` só lê arquivos no seu computador e
