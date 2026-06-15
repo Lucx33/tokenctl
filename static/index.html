@@ -436,14 +436,17 @@ function drawPeriod(){
   if (!el || !window.__data) return;
   const P = (window.__data.periods || {})[PERIOD] || {};
   const rows = [
-    ['valor equivalente', fmtU(P.cost||0), 'accent'],
-    ['tokens', fmtN(P.tokens||0), ''],
-    ['mensagens', fmtN(P.messages||0), ''],
+    ['valor equivalente', P.cost||0, fmtU, 'accent'],
+    ['tokens', P.tokens||0, fmtN, ''],
+    ['mensagens', P.messages||0, fmtN, ''],
   ];
-  if (PERIOD !== 'session') rows.push(['sessões', fmtN(P.sessions||0), '']);
-  el.innerHTML = rows.map(([l,v,c])=>
+  if (PERIOD !== 'session') rows.push(['sessões', P.sessions||0, fmtN, '']);
+  el.innerHTML = rows.map(([l,v,f,c],i)=>
     `<div class="prow"><span class="l">${esc(l)}</span>`+
-    `<span class="v ${c}">${esc(v)}</span></div>`).join('');
+    `<span class="v ${c}" id="prow-${i}">${f(animPrev('period:'+PERIOD+':'+l))}</span></div>`
+  ).join('');
+  rows.forEach(([l,v,f],i)=>
+    countUp(document.getElementById('prow-'+i), 'period:'+PERIOD+':'+l, v, f));
   syncSeg();
 }
 /* troca de período (delegação - o painel é recriado a cada poll) */
@@ -546,16 +549,22 @@ addEventListener('mousemove', e=>{
   tip.style.left = x + 'px'; tip.style.top = y + 'px';
 });
 
+/* células numéricas a animar no count-up; preenchido por tbl(), consumido em render() */
+const tcells = [];
 function tbl(rows, keyName){
   const heads = [keyName,'input','output','cache read','cache write','msgs','sessões','valor'];
+  const cols = [['input',fmtN],['output',fmtN],['cache_read',fmtN],['cache_write',fmtN],
+                ['messages',fmtN],['sessions',fmtN],['cost',fmtU]];
   const h = '<tr>'+heads.map(x=>`<th>${x}</th>`).join('')+'</tr>';
-  const b = rows.map(r=>`<tr>
-    <td>${esc(r[keyName])}</td>
-    <td>${fmtN(r.input)}</td><td>${fmtN(r.output)}</td>
-    <td>${fmtN(r.cache_read)}</td><td>${fmtN(r.cache_write)}</td>
-    <td>${fmtN(r.messages)}</td><td>${fmtN(r.sessions)}</td>
-    <td class="cost">${fmtU(r.cost)}</td>
-  </tr>`).join('');
+  const b = rows.map(r=>{
+    const rk = keyName+':'+r[keyName];
+    const cells = cols.map(([f,fmt])=>{
+      const v = r[f]||0, key = 'cell:'+rk+':'+f, id = 'tc'+tcells.length;
+      tcells.push({id, key, v, fmt});
+      return `<td${fmt===fmtU?' class="cost"':''} id="${id}">${fmt(animPrev(key))}</td>`;
+    }).join('');
+    return `<tr><td>${esc(r[keyName])}</td>${cells}</tr>`;
+  }).join('');
   return `<table>${h}${b}</table>`;
 }
 
@@ -578,6 +587,17 @@ function animateNum(el, from, to, fmt, ms){
     el.textContent = fmt(from + (to-from)*ease(p));
     if (p < 1) requestAnimationFrame(step);
   })(performance.now());
+}
+
+/* count-up reaproveitável: guarda o último valor por chave e anima dele até o
+   novo a cada atualização. Se não mudou, escreve direto (sem animação à toa). */
+const animStore = {};
+function animPrev(key){ return animStore[key] ?? 0; }
+function countUp(el, key, value, fmt, ms){
+  if (!el) return;
+  const from = animStore[key] ?? 0;
+  animStore[key] = value;
+  animateNum(el, from, value, fmt, ms);
 }
 
 /* ---------- onboarding: tela de quem ainda não tem nenhum dado ---------- */
@@ -609,7 +629,6 @@ function renderEmpty(){
 }
 
 /* ---------- render (reexecutável a cada poll) ---------- */
-const kpiPrev = {};
 function render(d){
   window.__data = d;
   const t = d.totals || {};
@@ -625,11 +644,12 @@ function render(d){
     ['dias',  'dias ativos', t.days||0, fmtN, ''],
   ];
   const kpiHtml = kpis.map(([k,l,v,f,c])=>{
-    const from = kpiPrev[k] ?? 0, up = v > from + 1e-9;
+    const from = animPrev('kpi:'+k), up = v > from + 1e-9;
     return `<div class="kpi"><div class="l">${l}${up?' <span class="delta">▲</span>':''}</div>`
       + `<div class="v ${c}" id="kpi-${k}">${f(from)}</div></div>`;
   }).join('');
 
+  tcells.length = 0;   // reacumula as células numéricas das tabelas a cada render
   const tables =
     (d.by_provider && d.by_provider.length>1
       ? tbl(d.by_provider,'provider')+'<div style="height:14px"></div>' : '') +
@@ -649,10 +669,9 @@ function render(d){
     panel('proj','CUSTO POR PROJETO','<pre id="proj-chart"></pre>') +
     panel('table','DETALHE · provedor / modelo / máquina', tables);
 
-  kpis.forEach(([k,,v,f])=>{
-    animateNum(document.getElementById('kpi-'+k), kpiPrev[k] ?? 0, v, f);
-    kpiPrev[k] = v;
-  });
+  kpis.forEach(([k,,v,f])=>
+    countUp(document.getElementById('kpi-'+k), 'kpi:'+k, v, f));
+  tcells.forEach(c => countUp(document.getElementById(c.id), c.key, c.v, c.fmt));
   drawAll();
 }
 
