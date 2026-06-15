@@ -94,6 +94,90 @@ A aba **"Por máquina"** aparece sozinha quando há dados de mais de um computad
 O front aceita `?poll=<ms>` na URL para ajustar o intervalo de atualização
 automática (padrão 15000 ms).
 
+## Adicionar outros modelos / CLIs
+
+Hoje o tokenctl entende **Claude Code** e **Codex CLI**, mas a arquitetura é
+genérica: cada fonte é só uma função que lê os logs locais daquela ferramenta e
+devolve **registros num formato unificado**. Para suportar qualquer outro
+assistente (Gemini CLI, aider, opencode, etc.) basta escrever um parser novo.
+
+### Como funciona
+
+Todo o dashboard trabalha em cima de um dicionário por requisição/mensagem:
+
+```python
+{
+  "provider": "claude",        # nome da ferramenta/provedor (vira a aba)
+  "model": "claude-opus-4-8",  # id do modelo
+  "ts": "2026-06-14T10:00:00Z",# timestamp ISO-8601
+  "project": "tokenctl",       # nome da pasta do projeto
+  "session": "abc-123",        # id da sessão (qualquer string estável)
+  "machine": "meu-pc",         # hostname (preenchido para você)
+  "input": 1200, "output": 340,
+  "cache_read": 0, "cache_write": 0,
+  "tokens": 1540,              # soma do que quiser contar
+  "cost": 0.0123,              # valor equivalente em API (USD)
+  "uid": "gem:abc-123:42",     # id único p/ deduplicar (NÃO repetir)
+}
+```
+
+### Passos
+
+1. **Tabela de preços + função de custo** (USD por 1M tokens), espelhando
+   `ANTHROPIC_PRICING`/`OPENAI_PRICING` e `anthropic_cost()`/`openai_cost()`.
+2. **Um gerador `iter_<ferramenta>_records(machine)`** que lê os logs locais e
+   dá `yield` em dicionários no formato acima - igual a `iter_claude_records` /
+   `iter_codex_records`.
+3. **Ligue a fonte** em `load_records()`:
+
+   ```python
+   for rec in iter_gemini_records(machine):
+       add(rec)
+   ```
+
+O `uid` é o que evita contagem dobrada quando o mesmo dado vem de várias
+máquinas - use algo determinístico (ex.: `f"gem:{session}:{n}"`). O `cost` é só
+o valor equivalente em API; se não souber o preço, pode deixar `0.0`.
+
+Esqueleto de um parser novo:
+
+```python
+def gemini_dir() -> Path:
+    return Path(os.environ.get("GEMINI_DIR", Path.home() / ".gemini"))
+
+def iter_gemini_records(machine: str):
+    d = gemini_dir()
+    if not d.is_dir():
+        return
+    for path in d.rglob("*.log"):          # ajuste ao formato real
+        for obj in _iter_lines(path):      # _iter_lines já lê JSONL com segurança
+            # ... extraia model, tokens, ts, session do seu log ...
+            yield {
+                "provider": "gemini", "model": model, "ts": ts,
+                "project": project, "session": session, "machine": machine,
+                "input": inp, "output": out, "cache_read": 0, "cache_write": 0,
+                "tokens": inp + out,
+                "cost": gemini_cost(model, inp, out),
+                "uid": f"gem:{session}:{n}",
+            }
+```
+
+### Exemplo: Gemini CLI
+
+O [Gemini CLI](https://github.com/google-gemini/gemini-cli) (open source) **não**
+grava um transcript de uso por padrão - ele expõe o consumo via OpenTelemetry, que
+vem **desligado**. Para o tokenctl conseguir ler, ative o log local em
+`~/.gemini/settings.json`:
+
+```json
+{ "telemetry": { "enabled": true, "target": "local", "outfile": ".gemini/telemetry.log" } }
+```
+
+A partir daí, os tokens aparecem no `.gemini/telemetry.log` nas métricas
+`gemini_cli.api_response` (`input_token_count`, `output_token_count`,
+`cached_content_token_count`, `model`) e `gemini_cli.token.usage`. Seu parser lê
+esse arquivo e mapeia esses campos para o registro unificado acima.
+
 ## Preços
 
 Tabela em `PRICING` no `app.py` (USD por 1M tokens, input/output). Cache: leitura
