@@ -20,17 +20,18 @@ backend reparseia os dados a cada request e o front faz *polling* automático
 
 ## Demonstração
 
-Tour da aplicação: [`assets/tour.mp4`](assets/tour.mp4) (clique para assistir).
+Tour da aplicação (versão completa com áudio em [`assets/tour.mp4`](assets/tour.mp4)):
 
-<video src="assets/tour.mp4" controls width="820"></video>
+<p align="center">
+  <img src="assets/tour.gif" alt="Tour do tokenctl" width="820">
+</p>
 
 <p align="center">
   <img src="assets/screenshot-desktop.png" alt="Dashboard do tokenctl" width="820">
 </p>
 
 <p align="center">
-  <img src="assets/screenshot-onboarding.png" alt="Tela inicial, sem dados" width="430">
-  <img src="assets/screenshot-mobile.png" alt="Layout no celular" width="200">
+  <img src="assets/screenshot-onboarding.png" alt="Tela inicial, sem dados" width="620">
 </p>
 
 ## Segurança e privacidade
