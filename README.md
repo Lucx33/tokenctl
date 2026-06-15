@@ -20,7 +20,7 @@ backend reparseia os dados a cada request e o front faz *polling* automático
 
 ## Demonstração
 
-Tour da aplicação (versão completa com áudio em [`assets/tour.mp4`](assets/tour.mp4)):
+Tour da aplicação:
 
 <p align="center">
   <img src="assets/tour.gif" alt="Tour do tokenctl" width="820">
