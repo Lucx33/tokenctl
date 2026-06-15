@@ -1,0 +1,12 @@
+[project]
+name = "tokenctl"
+version = "0.1.0"
+description = "Visualizador web de uso do plano Claude Code (tokens, custo equivalente em API, por modelo/projeto/dia)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[tool.uv]
+package = false

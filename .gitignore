@@ -1,0 +1,8 @@
+# venv/cache locais e dados de uso - nada disso vai pro repo.
+.venv/
+__pycache__/
+*.pyc
+.claude/
+
+# exports de uso: locais de cada máquina, nunca versionados
+data/
