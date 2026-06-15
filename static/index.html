@@ -360,30 +360,37 @@ function panel(area, title, body){
     <div class="ptitle">┤ ${title} ├</div><div class="pbody">${body}</div></div>`;
 }
 
-/* barras horizontais que se esticam para preencher o painel */
-function drawHbar(id, rows, valKey, labelKey, fmt, cls){
+/* barras horizontais que se esticam para preencher o painel (e crescem animadas) */
+function drawHbar(id, rows, valKey, labelKey, fmt, cls, anim){
   const el = document.getElementById(id);
   if (!el) return;
   const wC = Math.floor(el.clientWidth/CW) - 3;
   const hC = Math.floor(el.clientHeight/LH);
-  const max = Math.max(...rows.map(r=>r[valKey]), 1e-9);
+  const max = Math.max(...rows.map(r=>r[valKey]), 1e-9);   // escala fixa pelo alvo
   const lw = Math.min(24, Math.max(...rows.map(r=>String(r[labelKey]).length)));
   const vw = Math.max(...rows.map(r=>fmt(r[valKey]).length));
   const barW = Math.max(10, wC - lw - vw - 3);
   const gap = rows.length*2-1 <= hC ? '\n\n' : '\n';
-  el.innerHTML = rows.map(r=>{
-    const ratio = r[valKey]/max;
-    const n = Math.round(ratio*barW);
-    const lbl = String(r[labelKey]).slice(0,lw);
-    // intensidade: itens maiores mais brilhantes (e com glow), menores apagados
-    const pct = Math.round(35 + 65*ratio);
-    const glow = ratio > .65 ? `;text-shadow:0 0 8px var(--${cls})` : '';
-    return `${esc(pad(lbl,lw))} <span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${'█'.repeat(n)||'▏'}</span><span class="dim" style="opacity:.4">${'·'.repeat(barW-n)}</span> ${padL(fmt(r[valKey]),vw)}`;
-  }).join(gap);
+  const prev = rows.map(r => animStore['bar:'+id+':'+r[labelKey]] ?? 0);
+  const render = (prog) => {
+    el.innerHTML = rows.map((r,i)=>{
+      const cur = prev[i] + (r[valKey]-prev[i])*prog;   // cresce do anterior ao novo
+      const ratio = cur/max;
+      const n = Math.round(ratio*barW);
+      const lbl = String(r[labelKey]).slice(0,lw);
+      // intensidade: itens maiores mais brilhantes (e com glow), menores apagados
+      const pct = Math.round(35 + 65*ratio);
+      const glow = ratio > .65 ? `;text-shadow:0 0 8px var(--${cls})` : '';
+      return `${esc(pad(lbl,lw))} <span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${'█'.repeat(n)||'▏'}</span><span class="dim" style="opacity:.4">${'·'.repeat(Math.max(0,barW-n))}</span> ${padL(fmt(cur),vw)}`;
+    }).join(gap);
+  };
+  const store = () => rows.forEach((r,i)=> animStore['bar:'+id+':'+r[labelKey]] = r[valKey]);
+  if (anim) animateChart(id, 850, render, store);
+  else { cancelChart(id); render(1); store(); }
 }
 
-/* gráfico de colunas adaptativo, com valor sobre cada barra */
-function drawDaily(){
+/* gráfico de colunas adaptativo, com valor sobre cada barra (colunas crescem animadas) */
+function drawDaily(anim){
   const el = document.getElementById('daily-chart');
   if (!el || !window.__data) return;
   const all = window.__data.daily.filter(d=>d.date!=='?');
@@ -393,33 +400,40 @@ function drawDaily(){
   if (days.length*2 > wC) days = days.slice(-Math.floor(wC/2));
   const colW = Math.max(2, Math.min(22, Math.floor(wC/days.length)));
   const H = Math.max(4, hC - 1);                  // 1 linha p/ valor no topo
-  const max = Math.max(...days.map(d=>d.cost), 1e-9);
-  const tops = days.map(d=>d.cost/max*H);
-  const lines = [];
-  for(let y=H+1; y>=1; y--){
-    const axis = (y===H+1) ? ' '.repeat(7)
-      : (y===H || y===1 || y===Math.ceil(H/2))
-        ? padL(fmtUs(max*y/H),7) : ' '.repeat(7);
-    const cells = days.map((d,i)=>{
-      const t = tops[i];
-      if (y > Math.ceil(t)){           // acima da barra: valor no topo
-        return (y === Math.ceil(t)+1 && colW >= 6)
-          ? `<span class="dim">${ctr(fmtUs(d.cost),colW)}</span>`
-          : ' '.repeat(colW);
-      }
-      const g = (t >= y) ? '█' : (t >= y-0.5 ? '▄' : (y===1 && t>0 ? '▁' : ' '));
-      const pct = Math.round(35 + 65*(t/H));
-      const glow = t/H > .65 ? ';text-shadow:0 0 8px var(--accent)' : '';
-      return `<span style="color:color-mix(in srgb, var(--accent) ${pct}%, var(--bg))${glow}">${g.repeat(colW-1)}</span> `;
-    }).join('');
-    lines.push(`<span class="dim">${axis} ${y<=H?'┤':' '}</span>${cells}`);
-  }
-  lines.push(`<span class="dim">${' '.repeat(7)} └${'─'.repeat(days.length*colW)}</span>`);
-  const step = Math.max(1, Math.ceil(6/colW));
-  const xlbl = days.map((d,i)=> i%step===0
-    ? ctr(d.date.slice(5), colW*step) : '').join('').slice(0, days.length*colW);
-  lines.push(`<span class="dim">${' '.repeat(9)}${xlbl}</span>`);
-  el.innerHTML = lines.join('\n');
+  const max = Math.max(...days.map(d=>d.cost), 1e-9);   // escala fixa pelo alvo
+  const prev = days.map(d => animStore['day:'+d.date] ?? 0);
+  const render = (prog) => {
+    const cur = days.map((d,i)=> prev[i] + (d.cost-prev[i])*prog);  // cresce
+    const tops = cur.map(c => c/max*H);
+    const lines = [];
+    for(let y=H+1; y>=1; y--){
+      const axis = (y===H+1) ? ' '.repeat(7)
+        : (y===H || y===1 || y===Math.ceil(H/2))
+          ? padL(fmtUs(max*y/H),7) : ' '.repeat(7);
+      const cells = days.map((d,i)=>{
+        const t = tops[i];
+        if (y > Math.ceil(t)){           // acima da barra: valor no topo
+          return (y === Math.ceil(t)+1 && colW >= 6)
+            ? `<span class="dim">${ctr(fmtUs(cur[i]),colW)}</span>`
+            : ' '.repeat(colW);
+        }
+        const g = (t >= y) ? '█' : (t >= y-0.5 ? '▄' : (y===1 && t>0 ? '▁' : ' '));
+        const pct = Math.round(35 + 65*(t/H));
+        const glow = t/H > .65 ? ';text-shadow:0 0 8px var(--accent)' : '';
+        return `<span style="color:color-mix(in srgb, var(--accent) ${pct}%, var(--bg))${glow}">${g.repeat(colW-1)}</span> `;
+      }).join('');
+      lines.push(`<span class="dim">${axis} ${y<=H?'┤':' '}</span>${cells}`);
+    }
+    lines.push(`<span class="dim">${' '.repeat(7)} └${'─'.repeat(days.length*colW)}</span>`);
+    const step = Math.max(1, Math.ceil(6/colW));
+    const xlbl = days.map((d,i)=> i%step===0
+      ? ctr(d.date.slice(5), colW*step) : '').join('').slice(0, days.length*colW);
+    lines.push(`<span class="dim">${' '.repeat(9)}${xlbl}</span>`);
+    el.innerHTML = lines.join('\n');
+  };
+  const store = () => days.forEach(d => animStore['day:'+d.date] = d.cost);
+  if (anim) animateChart('daily', 850, render, store);
+  else { cancelChart('daily'); render(1); store(); }
 }
 
 /* período selecionado: sessão atual | dia de hoje | essa semana */
@@ -457,8 +471,9 @@ addEventListener('click', e=>{
   drawPeriod();
 });
 
-/* heatmap de atividade estilo github: 1 célula por dia, semanas em colunas */
-function drawHeat(){
+/* heatmap de atividade estilo github: 1 célula por dia, semanas em colunas.
+   As células vão clareando (do apagado ao nível alvo) conforme o uso. */
+function drawHeat(anim){
   const el = document.getElementById('heat-chart');
   if (!el || !window.__data) return;
   const byDate = {};
@@ -496,22 +511,31 @@ function drawHeat(){
         mrow[w*cellW+k] = lbl[k];
     }
   }
-  const lines = [`<span class="dim">${'    '+mrow.join('')}</span>`];
-
-  for (let dow=0; dow<7; dow++){
-    let row = `<span class="dim">${pad(DIAS[dow]||'',3)}</span> `;
-    for (let w=0; w<weeks; w++){
-      const dt = new Date(start); dt.setDate(dt.getDate()+w*7+dow);
-      if (dt > today){ row += ' '.repeat(cellW); continue; }
-      const d = iso(dt), v = byDate[d]?.tokens||0;
-      row += `<span class="h${lvl(v)}" data-d="${d}">■</span>${cellPad}`;
-    }
-    lines.push(row);
-  }
-  lines.push(`<span class="dim">    menos </span>`+
+  const mhead = `<span class="dim">${'    '+mrow.join('')}</span>`;
+  const legend = `<span class="dim">    menos </span>`+
     [0,1,2,3,4].map(i=>`<span class="h${i}">■</span>`).join(' ')+
-    `<span class="dim"> mais · máx ${fmtN(max)} tokens/dia</span>`);
-  el.innerHTML = lines.join('\n');
+    `<span class="dim"> mais · máx ${fmtN(max)} tokens/dia</span>`;
+
+  const render = (prog) => {
+    const lines = [mhead];
+    for (let dow=0; dow<7; dow++){
+      let row = `<span class="dim">${pad(DIAS[dow]||'',3)}</span> `;
+      for (let w=0; w<weeks; w++){
+        const dt = new Date(start); dt.setDate(dt.getDate()+w*7+dow);
+        if (dt > today){ row += ' '.repeat(cellW); continue; }
+        const d = iso(dt), tgt = byDate[d]?.tokens||0;
+        const prev = animStore['heat:'+d] ?? 0;
+        const cur = prev + (tgt-prev)*prog;     // valor cresce, célula clareia
+        row += `<span class="h${lvl(cur)}" data-d="${d}">■</span>${cellPad}`;
+      }
+      lines.push(row);
+    }
+    lines.push(legend);
+    el.innerHTML = lines.join('\n');
+  };
+  const store = () => { for (const d in byDate) animStore['heat:'+d] = byDate[d].tokens; };
+  if (anim) animateChart('heat', 850, render, store);
+  else { cancelChart('heat'); render(1); store(); }
 }
 
 /* tooltip detalhado do heatmap */
@@ -568,13 +592,13 @@ function tbl(rows, keyName){
   return `<table>${h}${b}</table>`;
 }
 
-function drawAll(){ drawDaily(); drawPeriod(); drawHeat();
+function drawAll(anim){ drawDaily(anim); drawPeriod(); drawHeat(anim);
   if (window.__data){
-    drawHbar('model-chart', window.__data.by_model, 'cost','model', fmtU,'accent');
-    drawHbar('proj-chart', window.__data.by_project, 'cost','project', fmtU,'alt');
+    drawHbar('model-chart', window.__data.by_model, 'cost','model', fmtU,'accent', anim);
+    drawHbar('proj-chart', window.__data.by_project, 'cost','project', fmtU,'alt', anim);
   }
 }
-addEventListener('resize', drawAll);
+addEventListener('resize', () => drawAll(false));   // resize redesenha instantâneo
 
 /* ---------- contagem animada dos números ---------- */
 function animateNum(el, from, to, fmt, ms){
@@ -598,6 +622,24 @@ function countUp(el, key, value, fmt, ms){
   const from = animStore[key] ?? 0;
   animStore[key] = value;
   animateNum(el, from, value, fmt, ms);
+}
+
+/* animação de gráficos ASCII: chama draw(progress 0..1) a cada frame, para as
+   barras "crescerem" do valor anterior até o novo (e de 0 na carga da página). */
+const chartAnims = {};
+function cancelChart(key){
+  if (chartAnims[key]){ cancelAnimationFrame(chartAnims[key]); delete chartAnims[key]; }
+}
+function animateChart(key, ms, draw, done){
+  cancelChart(key);
+  ms = ms || 850;
+  const t0 = performance.now(), ease = x => 1-Math.pow(1-x,3);
+  (function step(now){
+    const p = Math.min(1, (now-t0)/ms);
+    draw(ease(p));
+    if (p < 1) chartAnims[key] = requestAnimationFrame(step);
+    else { delete chartAnims[key]; if (done) done(); }
+  })(performance.now());
 }
 
 /* ---------- onboarding: tela de quem ainda não tem nenhum dado ---------- */
@@ -672,7 +714,7 @@ function render(d){
   kpis.forEach(([k,,v,f])=>
     countUp(document.getElementById('kpi-'+k), 'kpi:'+k, v, f));
   tcells.forEach(c => countUp(document.getElementById(c.id), c.key, c.v, c.fmt));
-  drawAll();
+  drawAll(true);
 }
 
 /* ---------- indicador "live" + atualização automática ---------- */
