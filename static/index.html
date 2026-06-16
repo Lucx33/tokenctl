@@ -485,9 +485,13 @@ function drawHbar(id, rows, valKey, labelKey, fmt, cls, anim){
       const a0 = prev[i] > 1e-9 ? 1 : 0.12;
       const a1 = tgt[i]  > 1e-9 ? 1 : 0.12;
       const op = (a0 + (a1-a0)*prog).toFixed(3);
+      // barra + pontos somam SEMPRE barW (o stub '▏' do zero conta como 1), senão
+      // a linha de custo ~0 fica 1 char mais larga e desalinha a coluna de valor
+      const bar = n > 0 ? '█'.repeat(n) : '▏';
+      const dots = '·'.repeat(Math.max(0, barW - (n || 1)));
       return `<span style="opacity:${op}">${esc(pad(lbl,lw))} `
-        + `<span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${'█'.repeat(n)||'▏'}</span>`
-        + `<span class="dim" style="opacity:.4">${'·'.repeat(Math.max(0,barW-n))}</span> ${padL(fmt(cur),vw)}</span>`;
+        + `<span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${bar}</span>`
+        + `<span class="dim" style="opacity:.4">${dots}</span> ${padL(fmt(cur),vw)}</span>`;
     }).join(gap);
   };
   const store = () => {
