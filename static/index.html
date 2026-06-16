@@ -344,11 +344,13 @@ const fProv = document.getElementById('f-provider');
 const fMach = document.getElementById('f-machine');
 const fProj = document.getElementById('f-project');
 function fillSelect(sel, values, current, allLabel, labelFn){
-  const sig = values.join('|');
+  const sig = JSON.stringify(values);
   if (sel._sig !== sig){          // só remonta se as opções mudaram (não atrapalha aberto)
     sel._sig = sig;
-    sel.innerHTML = `<option value="">${allLabel}</option>` +
-      values.map(v=>`<option value="${esc(v)}">${esc(labelFn?labelFn(v):v)}</option>`).join('');
+    // new Option(texto, valor) define via DOM (sem parse de HTML), então rótulos
+    // com aspas/<> não corrompem o atributo value nem a opção renderizada
+    sel.replaceChildren(new Option(allLabel, ''));
+    values.forEach(v => sel.add(new Option(labelFn ? labelFn(v) : v, v)));
   }
   sel.value = current || '';
 }
@@ -864,8 +866,14 @@ function render(d){
   populateFilters(d.filters);
   const t = d.totals || {};
   const app = document.getElementById('app');
-  // sem nenhum dado → mostra o onboarding no lugar do dashboard
-  if (!(t.tokens > 0 || t.messages > 0)){ renderEmpty(); APP_BUILT = false; return; }
+  // onboarding SÓ quando não há dado nenhum no universo (sem filtro). Um filtro
+  // válido que não cruza nada (AND) mantém o dashboard com os slots zerados -
+  // os números/barras/colunas animam até 0 em vez de cair pra tela de boas-vindas.
+  const u = d.universe || {};
+  const hasGlobal = !!((u.models && u.models.length) || (u.dates && u.dates.length));
+  if (!hasGlobal && !(t.tokens > 0 || t.messages > 0)){
+    renderEmpty(); APP_BUILT = false; return;
+  }
   const kpis = kpiList(t);
 
   if (!APP_BUILT || app.classList.contains('empty')){

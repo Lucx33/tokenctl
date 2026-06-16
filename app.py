@@ -430,9 +430,11 @@ def build_app():
         providers = sorted({r.get("provider") for r in records if r.get("provider")})
         projects = sorted({r.get("project") for r in records if r.get("project")})
         universe = universe_of(records)
-        sel_m = [m for m in machine.split(",") if m]
-        sel_p = [p for p in provider.split(",") if p]
-        sel_j = [j for j in project.split(",") if j]
+        # valor único por parâmetro (a UI manda um só); assim rótulos que contêm
+        # vírgula, ex. "client,web", casam por igualdade exata em vez de virar lista
+        sel_m = [machine] if machine else []
+        sel_p = [provider] if provider else []
+        sel_j = [project] if project else []
         filtered = records
         if sel_m or sel_p or sel_j:
             filtered = [r for r in records
