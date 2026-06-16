@@ -62,6 +62,15 @@
   .delta{color:var(--txt);font-size:11px;animation:deltafade 1.8s forwards}
   @keyframes deltafade{0%{opacity:1}80%{opacity:1}100%{opacity:0}}
 
+  /* acessibilidade: respeita quem pediu menos movimento - desliga pulsos/blink
+     do CSS (o JS zera ANIM_MS à parte, então count-up/gráficos ficam instantâneos) */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{
+      animation-duration:.001ms !important; animation-iteration-count:1 !important;
+      transition-duration:.001ms !important;
+    }
+  }
+
   /* grid de painéis ocupando o resto da tela */
   #app{
     flex:1 1 auto;min-height:0;
@@ -273,10 +282,10 @@
 <header>
   <pre class="logo"><b>▓▒░ tokenctl</b> <span class="dim">│ ai usage │</span><span class="cmd"> <span class="dim">$</span> tokenctl --serve</span><span class="cursor">█</span></pre>
   <div class="tools">
-    <select id="f-provider" class="filt" title="filtrar por provedor de IA" hidden></select>
-    <select id="f-project" class="filt" title="filtrar por projeto" hidden></select>
-    <select id="f-machine" class="filt" title="filtrar por máquina" hidden></select>
-    <span id="live" title="atualização automática">● <span id="status" class="dim">conectando…</span></span>
+    <select id="f-provider" class="filt" aria-label="Filtrar por provedor de IA" title="filtrar por provedor de IA" hidden></select>
+    <select id="f-project" class="filt" aria-label="Filtrar por projeto" title="filtrar por projeto" hidden></select>
+    <select id="f-machine" class="filt" aria-label="Filtrar por máquina" title="filtrar por máquina" hidden></select>
+    <span id="live" title="atualização automática">● <span id="status" class="dim" role="status" aria-live="polite">conectando…</span></span>
     <button id="help-btn" title="juntar o uso de várias máquinas">[ + multi-máquina ]</button>
     <button id="randomize">[ randomize colors ]</button>
   </div>
@@ -302,7 +311,8 @@
     <p>Arraste os <code>usage-*.jsonl</code> de cada máquina para a área abaixo
       (ou clique para escolher). Pode soltar <span class="step">vários de uma
       vez</span>. Eles vão para a pasta <code>data/</code> desta máquina.</p>
-    <div id="drop">
+    <div id="drop" role="button" tabindex="0"
+         aria-label="Selecionar arquivos .jsonl para importar (ou arraste e solte)">
       <b>arraste os .jsonl aqui</b><br>
       <span class="dim">ou clique para selecionar arquivos</span>
       <input id="drop-input" type="file" accept=".jsonl" multiple hidden>
@@ -325,8 +335,11 @@
 </div>
 
 <script>
-/* duração das transições (count-up + gráficos). Ajuste único aqui. */
-const ANIM_MS = 1600;
+/* duração das transições (count-up + gráficos). Ajuste único aqui.
+   Vira 0 (instantâneo) quando o sistema pede menos movimento. */
+const REDUCE_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
+let ANIM_MS = REDUCE_MOTION.matches ? 0 : 1600;
+REDUCE_MOTION.addEventListener('change', e => { ANIM_MS = e.matches ? 0 : 1600; });
 const fmtN = n => new Intl.NumberFormat('pt-BR').format(Math.round(n));
 const fmtU = n => 'US$ ' + new Intl.NumberFormat('pt-BR',
   {minimumFractionDigits:2, maximumFractionDigits:2}).format(n);
@@ -339,7 +352,20 @@ const ctr = (s,w) => {s=String(s); if(s.length>=w) return s.slice(0,w);
 
 /* ---------- filtros da página (provedor / máquina) ---------- */
 const PROV_LABEL = {claude:'Anthropic', codex:'OpenAI'};
-const FILTERS = {provider:'', machine:'', project:''};
+// estado inicial dos filtros vem da URL (permite reload/bookmark/compartilhar uma visão filtrada)
+const FILTERS = (() => {
+  const q = new URLSearchParams(location.search);
+  return { provider:q.get('provider')||'', machine:q.get('machine')||'', project:q.get('project')||'' };
+})();
+/* reflete os filtros na URL sem recarregar (preserva ?poll= e o hash); idempotente */
+function syncURL(){
+  const p = new URLSearchParams(location.search);
+  ['provider','machine','project'].forEach(k => FILTERS[k] ? p.set(k, FILTERS[k]) : p.delete(k));
+  const qs = p.toString();
+  const want = location.pathname + (qs ? '?'+qs : '') + location.hash;
+  if (want !== location.pathname + location.search + location.hash)
+    history.replaceState(null, '', want);
+}
 const fProv = document.getElementById('f-provider');
 const fMach = document.getElementById('f-machine');
 const fProj = document.getElementById('f-project');
@@ -357,16 +383,21 @@ function fillSelect(sel, values, current, allLabel, labelFn){
 function populateFilters(f){
   if (!f){ fProv.hidden = fMach.hidden = fProj.hidden = true; return; }
   const provs = f.providers||[], machs = f.machines||[], projs = f.projects||[];
+  // descarta filtro salvo (ex. bookmark) que não existe mais nas opções atuais
+  if (FILTERS.provider && !provs.includes(FILTERS.provider)) FILTERS.provider = '';
+  if (FILTERS.project  && !projs.includes(FILTERS.project))  FILTERS.project  = '';
+  if (FILTERS.machine  && !machs.includes(FILTERS.machine))  FILTERS.machine  = '';
   fProv.hidden = provs.length < 2;   // só faz sentido filtrar com 2+ opções
   fMach.hidden = machs.length < 2;
   fProj.hidden = projs.length < 2;
   fillSelect(fProv, provs, FILTERS.provider, 'todos provedores', v=>PROV_LABEL[v]||v);
   fillSelect(fProj, projs, FILTERS.project, 'todos projetos');
   fillSelect(fMach, machs, FILTERS.machine, 'todas as máquinas');
+  syncURL();
 }
-fProv.onchange = () => { FILTERS.provider = fProv.value; refresh(); };
-fMach.onchange = () => { FILTERS.machine  = fMach.value; refresh(); };
-fProj.onchange = () => { FILTERS.project  = fProj.value; refresh(); };
+fProv.onchange = () => { FILTERS.provider = fProv.value; syncURL(); refreshNow(); };
+fMach.onchange = () => { FILTERS.machine  = fMach.value; syncURL(); refreshNow(); };
+fProj.onchange = () => { FILTERS.project  = fProj.value; syncURL(); refreshNow(); };
 function summaryURL(){
   const p = new URLSearchParams();
   if (FILTERS.provider) p.set('provider', FILTERS.provider);
@@ -708,23 +739,42 @@ function drawAll(anim){ drawDaily(anim); drawPeriod(); drawHeat(anim);
     drawHbar('proj-chart',  stableRows(pLabels, d.by_project,'project'),'cost','project', fmtU,'accent', anim);
   }
 }
-addEventListener('resize', () => drawAll(false));   // resize redesenha instantâneo
+/* redesenho (instantâneo) ao mudar de tamanho. Além do resize de janela, um
+   ResizeObserver pega mudança do PRÓPRIO painel (split de layout, scrollbar) e a
+   fonte web carregando muda CW/LH depois do measureChar inicial - tudo coalescido
+   num rAF para não redesenhar várias vezes no mesmo frame. */
+let redrawRAF = 0;
+function scheduleRedraw(){
+  cancelAnimationFrame(redrawRAF);
+  redrawRAF = requestAnimationFrame(() => drawAll(false));
+}
+addEventListener('resize', scheduleRedraw);
+if (window.ResizeObserver){
+  const app = document.getElementById('app');
+  if (app) new ResizeObserver(scheduleRedraw).observe(app);
+}
+if (document.fonts && document.fonts.ready){
+  document.fonts.ready.then(() => { measureChar(); scheduleRedraw(); });
+}
 
 /* ---------- contagem animada dos números ---------- */
 function animateNum(el, from, to, fmt, ms){
   if (!el) return;
+  // cancela uma animação anterior do MESMO elemento - senão, em trocas rápidas de
+  // filtro, dois loops competem pela mesma célula (jitter + CPU à toa).
+  if (el.__raf){ cancelAnimationFrame(el.__raf); el.__raf = 0; }
   ms = ms || ANIM_MS;
-  if (Math.abs(to-from) < 1e-9){ el.textContent = fmt(to); return; }
+  if (ms <= 0 || Math.abs(to-from) < 1e-9){ el.textContent = fmt(to); return; }
   el.textContent = fmt(from);            // valor inicial já visível
   let t0 = null;
   const ease = x => 1-Math.pow(1-x,3);
   // o relógio começa no 1º frame REAL (não na chamada): evita "pular" a animação
   // quando o primeiro frame demora a sair, ex. logo após um F5/carregamento.
-  requestAnimationFrame(function step(now){
+  el.__raf = requestAnimationFrame(function step(now){
     if (t0 === null) t0 = now;
     const p = Math.min(1, (now-t0)/ms);
     el.textContent = fmt(from + (to-from)*ease(p));
-    if (p < 1) requestAnimationFrame(step);
+    el.__raf = (p < 1) ? requestAnimationFrame(step) : 0;
   });
 }
 
@@ -748,6 +798,7 @@ function cancelChart(key){
 function animateChart(key, ms, draw, done){
   cancelChart(key);
   ms = ms || ANIM_MS;
+  if (ms <= 0){ draw(1); if (done) done(); return; }   // reduced-motion: estado final direto
   const ease = x => 1-Math.pow(1-x,3);
   draw(0);                               // estado inicial (barras zeradas) já visível
   let t0 = null;
@@ -930,13 +981,26 @@ function setStatus(ok){
 /* enquanto a aba está em segundo plano não renderizamos: o dado mais
    recente fica guardado e é aplicado só quando o usuário volta à aba */
 let pendingData = null;
+let reqSeq = 0;            // versão do request: resposta atrasada de filtro/poll antigo é ignorada
+let pollTimer = null;
 async function refresh(){
+  const seq = ++reqSeq;
   try{
-    const d = await (await fetch(summaryURL())).json();
-    if (document.hidden){ pendingData = d; }   // guarda p/ quando voltar
+    const resp = await fetch(summaryURL());
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);   // fetch não rejeita em 4xx/5xx
+    const d = await resp.json();
+    if (seq !== reqSeq) return;                 // chegou tarde: já há request mais novo
+    if (document.hidden){ pendingData = d; }    // guarda p/ quando voltar
     else { pendingData = null; render(d); setStatus(true); }
-  } catch(e){ if (!document.hidden) setStatus(false); }
+  } catch(e){ if (seq === reqSeq && !document.hidden) setStatus(false); }
 }
+/* polling ENCADEADO: reagenda só depois que o refresh termina, então um
+   reparse lento nunca sobrepõe chamadas. Ações do usuário reiniciam o ciclo. */
+function scheduleNext(){
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => { await refresh(); scheduleNext(); }, POLL_MS);
+}
+async function refreshNow(){ await refresh(); scheduleNext(); }
 addEventListener('visibilitychange', ()=>{
   if (!document.hidden && pendingData){
     const d = pendingData; pendingData = null;
@@ -979,10 +1043,13 @@ async function sendFiles(fileList){
         + ((r.skipped||[]).length ? ` <span class="dim">(ignorados: `
           + esc((r.skipped||[]).join(', ')) + `)</span>` : '')
       : '<span class="alt2">nenhum arquivo válido</span>';
-    if (okN) await refresh();   // o painel já mostra os dados novos
+    if (okN) await refreshNow();   // o painel já mostra os dados novos
   }catch(e){ dropResult.innerHTML = '<span class="alt2">falha: '+esc(e)+'</span>'; }
 }
 drop.onclick = () => dropInput.click();
+drop.addEventListener('keydown', e => {   // operável por teclado (role=button)
+  if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); dropInput.click(); }
+});
 dropInput.onchange = () => { sendFiles(dropInput.files); dropInput.value = ''; };
 ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
   e.preventDefault(); drop.classList.add('over'); }));
@@ -993,7 +1060,7 @@ drop.addEventListener('drop', e => sendFiles(e.dataTransfer.files));
 async function main(){
   measureChar();
   await refresh();
-  setInterval(refresh, POLL_MS);
+  scheduleNext();
 }
 main().catch(e=>{
   document.getElementById('app').innerHTML =
