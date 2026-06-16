@@ -302,6 +302,32 @@ def compute_periods(records: list[dict]) -> dict:
     return out
 
 
+def universe_of(records: list[dict]) -> dict:
+    """Esqueleto estável dos gráficos, calculado SEM filtro.
+
+    - dates: todas as datas com atividade, em ordem cronológica (eixo X do "por dia").
+    - models / projects: rótulos ordenados pelo custo global (ordem fixa das barras).
+
+    Filtrar reusa estes mesmos slots/posições, mudando só os valores - é o que
+    deixa a transição lisa, sem reposicionar colunas nem reordenar barras.
+    """
+    dcost: dict = defaultdict(float)
+    mcost: dict = defaultdict(float)
+    jcost: dict = defaultdict(float)
+    for r in records:
+        c = r.get("cost", 0) or 0
+        mcost[r.get("model") or "?"] += c
+        jcost[r.get("project") or "(?)"] += c
+        d = local_date(r.get("ts"))
+        if d != "?":
+            dcost[d] += c
+    return {
+        "dates": sorted(dcost),
+        "models": sorted(mcost, key=lambda k: -mcost[k]),
+        "projects": sorted(jcost, key=lambda k: -jcost[k]),
+    }
+
+
 def aggregate(records: list[dict]) -> dict:
     totals = defaultdict(float)
     stores = {k: {} for k in
@@ -393,9 +419,32 @@ def build_app():
     static = Path(__file__).parent / "static"
 
     @app.get("/api/summary")
-    def summary():
+    def summary(machine: str = "", provider: str = "", project: str = ""):
         # reparseia os transcripts a cada request - novos usos aparecem sozinhos
-        return JSONResponse(aggregate(load_records()))
+        records = load_records()
+        # universo completo (sempre o total, ignorando o filtro atual): alimenta os
+        # seletores E os "slots" estáveis dos gráficos - é o que mantém o eixo de
+        # datas e a ordem das barras fixos, então filtrar só muda a altura (suave),
+        # nunca reposiciona/reordena nada.
+        machines = sorted({r.get("machine") for r in records if r.get("machine")})
+        providers = sorted({r.get("provider") for r in records if r.get("provider")})
+        projects = sorted({r.get("project") for r in records if r.get("project")})
+        universe = universe_of(records)
+        sel_m = [m for m in machine.split(",") if m]
+        sel_p = [p for p in provider.split(",") if p]
+        sel_j = [j for j in project.split(",") if j]
+        filtered = records
+        if sel_m or sel_p or sel_j:
+            filtered = [r for r in records
+                        if (not sel_m or r.get("machine") in sel_m)
+                        and (not sel_p or r.get("provider") in sel_p)
+                        and (not sel_j or r.get("project") in sel_j)]
+        out = aggregate(filtered)
+        out["filters"] = {"machines": machines, "providers": providers,
+                          "projects": projects,
+                          "machine": sel_m, "provider": sel_p, "project": sel_j}
+        out["universe"] = universe
+        return JSONResponse(out)
 
     @app.post("/api/upload")
     def upload(files: list = Body(default=[], embed=True)):

@@ -40,6 +40,14 @@
     font:inherit;padding:2px 10px;cursor:pointer;text-shadow:inherit;
   }
   button:hover{background:var(--accent);color:var(--bg);text-shadow:none}
+  .filt{
+    background:var(--bg);color:var(--accent);border:1px solid var(--dim);
+    font:inherit;padding:2px 6px;cursor:pointer;text-shadow:inherit;
+    max-width:220px;
+  }
+  .filt:hover{border-color:var(--accent)}
+  .filt:focus{outline:none;border-color:var(--accent)}
+  .filt option{background:var(--bg);color:var(--txt)}
   .cursor{animation:blink 1s steps(1) infinite}
   @keyframes blink{50%{opacity:0}}
 
@@ -192,6 +200,11 @@
   #p-daily .pbody{display:flex;align-items:stretch}
   #daily-chart{flex:1 1 auto;min-width:0}
 
+  /* barras (modelo/projeto): o <pre> estica para ter altura confiável já no 1º
+     desenho - senão clientHeight=0 e o cálculo de quantas linhas cabem zera */
+  #p-model .pbody,#p-proj .pbody{display:flex;align-items:stretch}
+  #model-chart,#proj-chart{flex:1 1 auto;min-width:0}
+
   table{border-collapse:collapse;font:inherit;width:100%}
   th,td{text-align:right;padding:2px 10px;white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
@@ -260,6 +273,9 @@
 <header>
   <pre class="logo"><b>▓▒░ tokenctl</b> <span class="dim">│ ai usage │</span><span class="cmd"> <span class="dim">$</span> tokenctl --serve</span><span class="cursor">█</span></pre>
   <div class="tools">
+    <select id="f-provider" class="filt" title="filtrar por provedor de IA" hidden></select>
+    <select id="f-project" class="filt" title="filtrar por projeto" hidden></select>
+    <select id="f-machine" class="filt" title="filtrar por máquina" hidden></select>
     <span id="live" title="atualização automática">● <span id="status" class="dim">conectando…</span></span>
     <button id="help-btn" title="juntar o uso de várias máquinas">[ + multi-máquina ]</button>
     <button id="randomize">[ randomize colors ]</button>
@@ -309,6 +325,8 @@
 </div>
 
 <script>
+/* duração das transições (count-up + gráficos). Ajuste único aqui. */
+const ANIM_MS = 1600;
 const fmtN = n => new Intl.NumberFormat('pt-BR').format(Math.round(n));
 const fmtU = n => 'US$ ' + new Intl.NumberFormat('pt-BR',
   {minimumFractionDigits:2, maximumFractionDigits:2}).format(n);
@@ -318,6 +336,43 @@ const pad = (s,w) => String(s).length >= w ? String(s) : String(s)+' '.repeat(w-
 const padL = (s,w) => String(s).length >= w ? String(s) : ' '.repeat(w-String(s).length)+String(s);
 const ctr = (s,w) => {s=String(s); if(s.length>=w) return s.slice(0,w);
   const l=Math.floor((w-s.length)/2); return ' '.repeat(l)+s+' '.repeat(w-s.length-l)};
+
+/* ---------- filtros da página (provedor / máquina) ---------- */
+const PROV_LABEL = {claude:'Anthropic', codex:'OpenAI'};
+const FILTERS = {provider:'', machine:'', project:''};
+const fProv = document.getElementById('f-provider');
+const fMach = document.getElementById('f-machine');
+const fProj = document.getElementById('f-project');
+function fillSelect(sel, values, current, allLabel, labelFn){
+  const sig = values.join('|');
+  if (sel._sig !== sig){          // só remonta se as opções mudaram (não atrapalha aberto)
+    sel._sig = sig;
+    sel.innerHTML = `<option value="">${allLabel}</option>` +
+      values.map(v=>`<option value="${esc(v)}">${esc(labelFn?labelFn(v):v)}</option>`).join('');
+  }
+  sel.value = current || '';
+}
+function populateFilters(f){
+  if (!f){ fProv.hidden = fMach.hidden = fProj.hidden = true; return; }
+  const provs = f.providers||[], machs = f.machines||[], projs = f.projects||[];
+  fProv.hidden = provs.length < 2;   // só faz sentido filtrar com 2+ opções
+  fMach.hidden = machs.length < 2;
+  fProj.hidden = projs.length < 2;
+  fillSelect(fProv, provs, FILTERS.provider, 'todos provedores', v=>PROV_LABEL[v]||v);
+  fillSelect(fProj, projs, FILTERS.project, 'todos projetos');
+  fillSelect(fMach, machs, FILTERS.machine, 'todas as máquinas');
+}
+fProv.onchange = () => { FILTERS.provider = fProv.value; refresh(); };
+fMach.onchange = () => { FILTERS.machine  = fMach.value; refresh(); };
+fProj.onchange = () => { FILTERS.project  = fProj.value; refresh(); };
+function summaryURL(){
+  const p = new URLSearchParams();
+  if (FILTERS.provider) p.set('provider', FILTERS.provider);
+  if (FILTERS.machine)  p.set('machine',  FILTERS.machine);
+  if (FILTERS.project)  p.set('project',  FILTERS.project);
+  const q = p.toString();
+  return '/api/summary' + (q ? '?'+q : '');
+}
 
 /* ---------- paleta randômica ---------- */
 function randomizeColors(){
@@ -360,51 +415,80 @@ function panel(area, title, body){
     <div class="ptitle">┤ ${title} ├</div><div class="pbody">${body}</div></div>`;
 }
 
-/* barras horizontais que se esticam para preencher o painel (e crescem animadas) */
+/* barras horizontais com SLOTS ESTÁVEIS: `rows` já vem na ordem fixa do universo
+   (custo global), então o conjunto e as posições não mudam com o filtro - só o
+   comprimento de cada barra anima do valor atual ao novo. Item ausente no filtro
+   anima até 0 e esmaece (sem reordenar nem reflow); ao voltar, cresce e reacende. */
 function drawHbar(id, rows, valKey, labelKey, fmt, cls, anim){
   const el = document.getElementById(id);
   if (!el) return;
+  const prefix = 'bar:'+id+':';
   const wC = Math.floor(el.clientWidth/CW) - 3;
   const hC = Math.floor(el.clientHeight/LH);
-  const max = Math.max(...rows.map(r=>r[valKey]), 1e-9);   // escala fixa pelo alvo
-  const lw = Math.min(24, Math.max(...rows.map(r=>String(r[labelKey]).length)));
-  const vw = Math.max(...rows.map(r=>fmt(r[valKey]).length));
+  // corta o que não couber mantendo a ordem global (top-N estável, igual p/ todo filtro)
+  let gap = (rows.length*2-1 <= hC) ? '\n\n' : '\n';
+  const view = (gap === '\n' && rows.length > hC) ? rows.slice(0, Math.max(1, hC)) : rows;
+
+  // escala animada: comprimento das barras reescala suave, sem saltar
+  const newMax = Math.max(...view.map(r=>r[valKey]), 1e-9);
+  const prevMax = animStore['scale:'+id] ?? newMax;
+  const lw = Math.min(24, Math.max(1, ...view.map(r=>String(r[labelKey]).length)));
+  const vw = Math.max(1, ...view.map(r=>fmt(r[valKey]).length));
   const barW = Math.max(10, wC - lw - vw - 3);
-  const gap = rows.length*2-1 <= hC ? '\n\n' : '\n';
-  const prev = rows.map(r => animStore['bar:'+id+':'+r[labelKey]] ?? 0);
+
+  const prev = view.map(r => animStore[prefix+r[labelKey]] ?? 0);
+  const tgt  = view.map(r => r[valKey]);
   const render = (prog) => {
-    el.innerHTML = rows.map((r,i)=>{
-      const cur = prev[i] + (r[valKey]-prev[i])*prog;   // cresce do anterior ao novo
+    const max = prevMax + (newMax-prevMax)*prog;          // escala interpola junto
+    el.innerHTML = view.map((r,i)=>{
+      const cur = prev[i] + (tgt[i]-prev[i])*prog;        // do valor atual ao novo (ou a 0)
       const ratio = cur/max;
-      const n = Math.round(ratio*barW);
+      const n = Math.min(barW, Math.round(ratio*barW));
       const lbl = String(r[labelKey]).slice(0,lw);
-      // intensidade: itens maiores mais brilhantes (e com glow), menores apagados
       const pct = Math.round(35 + 65*ratio);
       const glow = ratio > .65 ? `;text-shadow:0 0 8px var(--${cls})` : '';
-      return `${esc(pad(lbl,lw))} <span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${'█'.repeat(n)||'▏'}</span><span class="dim" style="opacity:.4">${'·'.repeat(Math.max(0,barW-n))}</span> ${padL(fmt(cur),vw)}`;
+      // opacidade pela PRESENÇA (não magnitude): slot ausente no filtro esmaece;
+      // presente, mesmo pequeno, fica nítido. Interpola, então some/aparece suave.
+      const a0 = prev[i] > 1e-9 ? 1 : 0.12;
+      const a1 = tgt[i]  > 1e-9 ? 1 : 0.12;
+      const op = (a0 + (a1-a0)*prog).toFixed(3);
+      return `<span style="opacity:${op}">${esc(pad(lbl,lw))} `
+        + `<span style="color:color-mix(in srgb, var(--${cls}) ${pct}%, var(--bg))${glow}">${'█'.repeat(n)||'▏'}</span>`
+        + `<span class="dim" style="opacity:.4">${'·'.repeat(Math.max(0,barW-n))}</span> ${padL(fmt(cur),vw)}</span>`;
     }).join(gap);
   };
-  const store = () => rows.forEach((r,i)=> animStore['bar:'+id+':'+r[labelKey]] = r[valKey]);
-  if (anim) animateChart(id, 850, render, store);
+  const store = () => {
+    animStore['scale:'+id] = newMax;
+    view.forEach(r => animStore[prefix+r[labelKey]] = r[valKey]);
+  };
+  if (anim) animateChart(id, ANIM_MS, render, store);
   else { cancelChart(id); render(1); store(); }
 }
 
-/* gráfico de colunas adaptativo, com valor sobre cada barra (colunas crescem animadas) */
+/* colunas de custo por dia com EIXO X ESTÁVEL: as datas vêm do universo (sem
+   filtro), então a quantidade/posição de colunas e os rótulos do eixo X não mudam
+   com o filtro. Filtrar só muda a ALTURA de cada coluna (dia ausente vira coluna
+   de altura 0, suave); o eixo Y (escala) reescala animado junto. */
 function drawDaily(anim){
   const el = document.getElementById('daily-chart');
   if (!el || !window.__data) return;
-  const all = window.__data.daily.filter(d=>d.date!=='?');
   const wC = Math.floor(el.clientWidth/CW) - 9;   // margem do eixo y
   const hC = Math.floor(el.clientHeight/LH) - 2;  // eixo x + labels
-  let days = all;
-  if (days.length*2 > wC) days = days.slice(-Math.floor(wC/2));
-  const colW = Math.max(2, Math.min(22, Math.floor(wC/days.length)));
+  const costBy = {};
+  window.__data.daily.forEach(d=>{ if(d.date!=='?') costBy[d.date] = d.cost; });
+  let dates = (window.__data.universe && window.__data.universe.dates) || Object.keys(costBy).sort();
+  if (dates.length*2 > wC) dates = dates.slice(-Math.floor(wC/2));   // janela estável (mesma p/ todo filtro)
+  const days = dates.map(dt => ({date: dt, cost: costBy[dt] || 0}));
+  const colW = Math.max(2, Math.min(22, Math.floor(wC/Math.max(1, days.length))));
   const H = Math.max(4, hC - 1);                  // 1 linha p/ valor no topo
-  const max = Math.max(...days.map(d=>d.cost), 1e-9);   // escala fixa pelo alvo
+  // escala animada: o eixo Y reescala suavemente em vez de saltar
+  const newMax = Math.max(...days.map(d=>d.cost), 1e-9);
+  const prevMax = animStore['scale:daily'] ?? newMax;
   const prev = days.map(d => animStore['day:'+d.date] ?? 0);
   const render = (prog) => {
-    const cur = days.map((d,i)=> prev[i] + (d.cost-prev[i])*prog);  // cresce
-    const tops = cur.map(c => c/max*H);
+    const max = prevMax + (newMax-prevMax)*prog;
+    const vals = days.map((d,i)=> prev[i] + (d.cost-prev[i])*prog);  // do atual ao novo (ou a 0)
+    const tops = vals.map(c => c/max*H);
     const lines = [];
     for(let y=H+1; y>=1; y--){
       const axis = (y===H+1) ? ' '.repeat(7)
@@ -412,9 +496,9 @@ function drawDaily(anim){
           ? padL(fmtUs(max*y/H),7) : ' '.repeat(7);
       const cells = days.map((d,i)=>{
         const t = tops[i];
-        if (y > Math.ceil(t)){           // acima da barra: valor no topo
-          return (y === Math.ceil(t)+1 && colW >= 6)
-            ? `<span class="dim">${ctr(fmtUs(cur[i]),colW)}</span>`
+        if (y > Math.ceil(t)){           // acima da barra: valor no topo (só se relevante)
+          return (y === Math.ceil(t)+1 && colW >= 6 && vals[i] > newMax*0.005)
+            ? `<span class="dim">${ctr(fmtUs(vals[i]),colW)}</span>`
             : ' '.repeat(colW);
         }
         const g = (t >= y) ? '█' : (t >= y-0.5 ? '▄' : (y===1 && t>0 ? '▁' : ' '));
@@ -431,8 +515,11 @@ function drawDaily(anim){
     lines.push(`<span class="dim">${' '.repeat(9)}${xlbl}</span>`);
     el.innerHTML = lines.join('\n');
   };
-  const store = () => days.forEach(d => animStore['day:'+d.date] = d.cost);
-  if (anim) animateChart('daily', 850, render, store);
+  const store = () => {
+    animStore['scale:daily'] = newMax;
+    days.forEach(d => animStore['day:'+d.date] = d.cost);
+  };
+  if (anim) animateChart('daily', ANIM_MS, render, store);
   else { cancelChart('daily'); render(1); store(); }
 }
 
@@ -479,7 +566,9 @@ function drawHeat(anim){
   const byDate = {};
   window.__data.daily.forEach(d=>{ if(d.date!=='?') byDate[d.date] = d; });
   window.__heat = byDate;
-  const max = Math.max(...Object.values(byDate).map(d=>d.tokens), 1);
+  // escala animada: a legenda ("máx N") e a intensidade das células reescalam suave
+  const newMax = Math.max(...Object.values(byDate).map(d=>d.tokens), 1);
+  const prevMax = animStore['scale:heat'] ?? newMax;
 
   const wC = Math.floor(el.clientWidth/CW);
   const weeks = Math.max(8, Math.min(53, Math.floor((wC-5)/2)));
@@ -493,7 +582,7 @@ function drawHeat(anim){
                  'jul','ago','set','out','nov','dez'];
   const DIAS = {1:'seg', 3:'qua', 5:'sex'};
   const iso = dt => dt.toISOString().slice(0,10);
-  const lvl = v => {
+  const lvl = (v, max) => {
     if (!v) return 0;
     const r = Math.sqrt(v/max);            // sqrt: suaviza a dominância do cache
     return r > .75 ? 4 : r > .5 ? 3 : r > .25 ? 2 : 1;
@@ -512,11 +601,12 @@ function drawHeat(anim){
     }
   }
   const mhead = `<span class="dim">${'    '+mrow.join('')}</span>`;
-  const legend = `<span class="dim">    menos </span>`+
+  const legendFor = max => `<span class="dim">    menos </span>`+
     [0,1,2,3,4].map(i=>`<span class="h${i}">■</span>`).join(' ')+
     `<span class="dim"> mais · máx ${fmtN(max)} tokens/dia</span>`;
 
   const render = (prog) => {
+    const max = prevMax + (newMax-prevMax)*prog;   // escala interpola junto
     const lines = [mhead];
     for (let dow=0; dow<7; dow++){
       let row = `<span class="dim">${pad(DIAS[dow]||'',3)}</span> `;
@@ -526,15 +616,21 @@ function drawHeat(anim){
         const d = iso(dt), tgt = byDate[d]?.tokens||0;
         const prev = animStore['heat:'+d] ?? 0;
         const cur = prev + (tgt-prev)*prog;     // valor cresce, célula clareia
-        row += `<span class="h${lvl(cur)}" data-d="${d}">■</span>${cellPad}`;
+        row += `<span class="h${lvl(cur, max)}" data-d="${d}">■</span>${cellPad}`;
       }
       lines.push(row);
     }
-    lines.push(legend);
+    lines.push(legendFor(max));
     el.innerHTML = lines.join('\n');
   };
-  const store = () => { for (const d in byDate) animStore['heat:'+d] = byDate[d].tokens; };
-  if (anim) animateChart('heat', 850, render, store);
+  const store = () => {
+    animStore['scale:heat'] = newMax;
+    for (const d in byDate) animStore['heat:'+d] = byDate[d].tokens;
+    // datas que o filtro removeu vão a 0 (senão re-piscariam claras na próxima att.)
+    Object.keys(animStore).filter(k => k.startsWith('heat:'))
+      .forEach(k => { if (!byDate[k.slice(5)]) animStore[k] = 0; });
+  };
+  if (anim) animateChart('heat', ANIM_MS, render, store);
   else { cancelChart('heat'); render(1); store(); }
 }
 
@@ -592,10 +688,22 @@ function tbl(rows, keyName){
   return `<table>${h}${b}</table>`;
 }
 
+/* monta linhas em ORDEM ESTÁVEL (a do universo, custo global) preenchendo o valor
+   filtrado - rótulo ausente no filtro entra com custo 0. Slots iguais p/ todo
+   filtro => barras só mudam de tamanho, nunca de posição. */
+function stableRows(labels, rows, key){
+  const cost = {};
+  (rows||[]).forEach(r => cost[r[key]] = r.cost);
+  return (labels||[]).map(l => ({[key]: l, cost: cost[l] || 0}));
+}
 function drawAll(anim){ drawDaily(anim); drawPeriod(); drawHeat(anim);
-  if (window.__data){
-    drawHbar('model-chart', window.__data.by_model, 'cost','model', fmtU,'accent', anim);
-    drawHbar('proj-chart', window.__data.by_project, 'cost','project', fmtU,'accent', anim);
+  const d = window.__data;
+  if (d){
+    const uni = d.universe || {};
+    const mLabels = uni.models   || (d.by_model  ||[]).map(r=>r.model);
+    const pLabels = uni.projects || (d.by_project||[]).map(r=>r.project);
+    drawHbar('model-chart', stableRows(mLabels, d.by_model, 'model'), 'cost','model', fmtU,'accent', anim);
+    drawHbar('proj-chart',  stableRows(pLabels, d.by_project,'project'),'cost','project', fmtU,'accent', anim);
   }
 }
 addEventListener('resize', () => drawAll(false));   // resize redesenha instantâneo
@@ -603,7 +711,7 @@ addEventListener('resize', () => drawAll(false));   // resize redesenha instant�
 /* ---------- contagem animada dos números ---------- */
 function animateNum(el, from, to, fmt, ms){
   if (!el) return;
-  ms = ms || 850;
+  ms = ms || ANIM_MS;
   if (Math.abs(to-from) < 1e-9){ el.textContent = fmt(to); return; }
   el.textContent = fmt(from);            // valor inicial já visível
   let t0 = null;
@@ -637,7 +745,7 @@ function cancelChart(key){
 }
 function animateChart(key, ms, draw, done){
   cancelChart(key);
-  ms = ms || 850;
+  ms = ms || ANIM_MS;
   const ease = x => 1-Math.pow(1-x,3);
   draw(0);                               // estado inicial (barras zeradas) já visível
   let t0 = null;
@@ -679,14 +787,15 @@ function renderEmpty(){
   </div>`;
 }
 
-/* ---------- render (reexecutável a cada poll) ---------- */
-function render(d){
-  window.__data = d;
-  const t = d.totals || {};
-  // sem nenhum dado → mostra o onboarding no lugar do dashboard
-  if (!(t.tokens > 0 || t.messages > 0)){ renderEmpty(); return; }
-  document.getElementById('app').classList.remove('empty');
-  const kpis = [
+/* ---------- render (reexecutável a cada poll / troca de filtro) ----------
+   O esqueleto dos painéis é montado UMA vez. Nas atualizações seguintes só os
+   VALORES mudam, animados nos elementos que já existem - então trocar de filtro
+   faz as barras subirem/descerem e os números rolarem, sem reconstruir (piscar)
+   a página. Só o painel de tabelas é refeito em lugar (as linhas variam com o
+   filtro), mas isolado, sem afetar os gráficos. */
+let APP_BUILT = false;
+function kpiList(t){
+  return [
     ['valor', 'valor equivalente', t.cost||0, fmtU, 'accent'],
     ['media', 'média por dia', (t.cost||0)/Math.max(1,t.days||1), fmtU, 'accent'],
     ['tokens','tokens totais', t.tokens||0, fmtN, ''],
@@ -694,35 +803,110 @@ function render(d){
     ['sess',  'sessões', t.sessions||0, fmtN, ''],
     ['dias',  'dias ativos', t.days||0, fmtN, ''],
   ];
-  const kpiHtml = kpis.map(([k,l,v,f,c])=>{
-    const from = animPrev('kpi:'+k), up = v > from + 1e-9;
-    return `<div class="kpi"><div class="l">${l}${up?' <span class="delta">▲</span>':''}</div>`
-      + `<div class="v ${c}" id="kpi-${k}">${f(from)}</div></div>`;
-  }).join('');
+}
+/* linhas de tabela em SLOTS ESTÁVEIS: mesmo conjunto/ordem para qualquer filtro
+   (modelos pela ordem global do universo; provedores/máquinas pela lista total).
+   Linha ausente no filtro vem zerada e os valores fazem count-up até 0 - a tabela
+   nunca reestrutura, só anima os números. */
+const ZERO_ROW = {input:0,output:0,cache_read:0,cache_write:0,messages:0,sessions:0,cost:0};
+function stableTableRows(labels, rows, key){
+  const m = {}; (rows||[]).forEach(r => m[r[key]] = r);
+  return (labels||[]).map(l => m[l] || {[key]: l, ...ZERO_ROW});
+}
+function tableModel(d){
+  const labels = (d.universe && d.universe.models) || (d.by_model||[]).map(r=>r.model);
+  return stableTableRows(labels, d.by_model, 'model');
+}
+function tableProv(d){
+  const labels = (d.filters && d.filters.providers) || [];
+  return labels.length>1 ? stableTableRows(labels, d.by_provider, 'provider') : null;
+}
+function tableMach(d){
+  const labels = (d.filters && d.filters.machines) || [];
+  return labels.length>1 ? stableTableRows(labels, d.by_machine, 'machine') : null;
+}
+function tablesHtml(d){
+  tcells.length = 0;   // reacumula as células numéricas das tabelas
+  const p = tableProv(d), ma = tableMach(d);
+  return (p ? tbl(p,'provider')+'<div style="height:14px"></div>' : '') +
+    tbl(tableModel(d),'model') +
+    (ma ? '<div style="height:14px"></div>'+tbl(ma,'machine') : '');
+}
+/* reproduz a MESMA sequência de ids de células de tablesHtml(), sem gerar HTML -
+   usado quando a estrutura das linhas não mudou (só anima os valores no lugar). */
+function fillCells(d){
+  tcells.length = 0;
+  const p = tableProv(d), ma = tableMach(d);
+  if (p) tbl(p,'provider');
+  tbl(tableModel(d),'model');
+  if (ma) tbl(ma,'machine');
+}
+/* assinatura das linhas (rótulos estáveis): só muda quando surge modelo/provedor/
+   máquina novo no universo - aí sim reconstrói; senão a tabela só faz count-up. */
+function tableSig(d){
+  const p = tableProv(d), ma = tableMach(d);
+  const keys = (rows,name)=> (rows||[]).map(r=>r[name]).join(',');
+  return [p?keys(p,'provider'):'', keys(tableModel(d),'model'), ma?keys(ma,'machine'):''].join('|');
+}
+function updateTables(d){
+  const host = document.getElementById('tables-host');
+  const sig = tableSig(d);
+  if (host.dataset.sig !== sig){     // só recria o DOM quando as linhas mudam de fato
+    host.innerHTML = tablesHtml(d);  // (as células já nascem com o valor ANTERIOR p/ animar)
+    host.dataset.sig = sig;
+  } else {
+    fillCells(d);                    // estrutura igual: nada de innerHTML, só recalcula
+  }
+  tcells.forEach(c => countUp(document.getElementById(c.id), c.key, c.v, c.fmt));
+}
+function render(d){
+  window.__data = d;
+  populateFilters(d.filters);
+  const t = d.totals || {};
+  const app = document.getElementById('app');
+  // sem nenhum dado → mostra o onboarding no lugar do dashboard
+  if (!(t.tokens > 0 || t.messages > 0)){ renderEmpty(); APP_BUILT = false; return; }
+  const kpis = kpiList(t);
 
-  tcells.length = 0;   // reacumula as células numéricas das tabelas a cada render
-  const tables =
-    (d.by_provider && d.by_provider.length>1
-      ? tbl(d.by_provider,'provider')+'<div style="height:14px"></div>' : '') +
-    tbl(d.by_model,'model') +
-    (d.by_machine && d.by_machine.length>1
-      ? '<div style="height:14px"></div>'+tbl(d.by_machine,'machine') : '');
+  if (!APP_BUILT || app.classList.contains('empty')){
+    // primeira montagem (ou voltando do onboarding): cria o esqueleto
+    app.classList.remove('empty');
+    const kpiHtml = kpis.map(([k,l,v,f,c])=>{
+      const from = animPrev('kpi:'+k), up = v > from + 1e-9;
+      return `<div class="kpi"><div class="l">${l}${up?' <span class="delta">▲</span>':''}</div>`
+        + `<div class="v ${c}" id="kpi-${k}">${f(from)}</div></div>`;
+    }).join('');
+    app.innerHTML =
+      panel('kpis','TOTAIS', kpiHtml) +
+      panel('daily','CUSTO POR DIA · US$','<pre id="daily-chart"></pre>') +
+      panel('tokens','USO POR PERÍODO',
+        `<div class="pseg" id="period-seg">`+
+        PERIOD_OPTS.map(([p,l])=>`<span data-p="${p}">${l}</span>`).join('')+
+        `</div><pre id="period-chart"></pre>`) +
+      panel('heat','ATIVIDADE · tokens por dia','<pre id="heat-chart"></pre>') +
+      panel('model','CUSTO POR MODELO','<pre id="model-chart"></pre>') +
+      panel('proj','CUSTO POR PROJETO','<pre id="proj-chart"></pre>') +
+      panel('table','DETALHE · provedor / modelo / máquina',
+        '<div id="tables-host"></div>');
+    APP_BUILT = true;
+  } else {
+    // atualização em lugar: reacende a setinha ▲ de alta nos KPIs que subiram
+    kpis.forEach(([k,l])=>{
+      const el = document.getElementById('kpi-'+k);
+      const lbl = el && el.parentElement.querySelector('.l');
+      if (!lbl) return;
+      const v = animPrev('kpi:'+k);   // valor atual exibido (antes do countUp abaixo)
+      const up = (k==='valor'?t.cost||0 : k==='media'?(t.cost||0)/Math.max(1,t.days||1)
+                 : k==='tokens'?t.tokens||0 : k==='msgs'?t.messages||0
+                 : k==='sess'?t.sessions||0 : t.days||0) > v + 1e-9;
+      lbl.innerHTML = l + (up ? ' <span class="delta">▲</span>' : '');
+    });
+  }
 
-  document.getElementById('app').innerHTML =
-    panel('kpis','TOTAIS', kpiHtml) +
-    panel('daily','CUSTO POR DIA · US$','<pre id="daily-chart"></pre>') +
-    panel('tokens','USO POR PERÍODO',
-      `<div class="pseg" id="period-seg">`+
-      PERIOD_OPTS.map(([p,l])=>`<span data-p="${p}">${l}</span>`).join('')+
-      `</div><pre id="period-chart"></pre>`) +
-    panel('heat','ATIVIDADE · tokens por dia','<pre id="heat-chart"></pre>') +
-    panel('model','CUSTO POR MODELO','<pre id="model-chart"></pre>') +
-    panel('proj','CUSTO POR PROJETO','<pre id="proj-chart"></pre>') +
-    panel('table','DETALHE · provedor / modelo / máquina', tables);
-
+  // conteúdo dinâmico - vale para os dois caminhos, sempre animando do estado atual
+  updateTables(d);
   kpis.forEach(([k,,v,f])=>
     countUp(document.getElementById('kpi-'+k), 'kpi:'+k, v, f));
-  tcells.forEach(c => countUp(document.getElementById(c.id), c.key, c.v, c.fmt));
   drawAll(true);
 }
 
@@ -740,7 +924,7 @@ function setStatus(ok){
 let pendingData = null;
 async function refresh(){
   try{
-    const d = await (await fetch('/api/summary')).json();
+    const d = await (await fetch(summaryURL())).json();
     if (document.hidden){ pendingData = d; }   // guarda p/ quando voltar
     else { pendingData = null; render(d); setStatus(true); }
   } catch(e){ if (!document.hidden) setStatus(false); }
