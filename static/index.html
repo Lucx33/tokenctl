@@ -207,7 +207,14 @@
 
   /* custo por dia: o gráfico ASCII estica para ocupar toda a altura do painel */
   #p-daily .pbody{display:flex;align-items:stretch}
-  #daily-chart{flex:1 1 auto;min-width:0}
+  #daily-chart{flex:1 1 auto;min-width:0;position:relative}
+  /* linha da média desenhada POR CIMA das barras, sem mexer no ASCII */
+  .avgline{position:absolute;height:0;border-top:1px dashed var(--accent);
+    pointer-events:none;z-index:2;opacity:.85}
+  .avgline .avglbl{position:absolute;right:100%;top:50%;
+    transform:translateY(-50%);margin-right:5px;white-space:nowrap;
+    font-size:11px;line-height:1;color:var(--accent);
+    background:var(--bg);padding:1px 3px;border-radius:2px}
 
   /* barras (modelo/projeto): o <pre> estica para ter altura confiável já no 1º
      desenho - senão clientHeight=0 e o cálculo de quantas linhas cabem zera */
@@ -522,10 +529,15 @@ function drawDaily(anim){
   const newMax = Math.max(...days.map(d=>d.cost), 1e-9);
   const prevMax = animStore['scale:daily'] ?? newMax;
   const prev = days.map(d => animStore['day:'+d.date] ?? 0);
+  // média do período exibido (média por dia ATIVO, igual ao KPI "média por dia")
+  const active = days.filter(d=>d.cost>0);
+  const avg = active.length ? active.reduce((s,d)=>s+d.cost,0)/active.length : 0;
+  const prevAvg = animStore['avg:daily'] ?? avg;
   const render = (prog) => {
     const max = prevMax + (newMax-prevMax)*prog;
     const vals = days.map((d,i)=> prev[i] + (d.cost-prev[i])*prog);  // do atual ao novo (ou a 0)
     const tops = vals.map(c => c/max*H);
+    const a = prevAvg + (avg-prevAvg)*prog;   // média animada (p/ overlay)
     const lines = [];
     for(let y=H+1; y>=1; y--){
       const axis = (y===H+1) ? ' '.repeat(7)
@@ -551,9 +563,22 @@ function drawDaily(anim){
       ? ctr(d.date.slice(5), colW*step) : '').join('').slice(0, days.length*colW);
     lines.push(`<span class="dim">${' '.repeat(9)}${xlbl}</span>`);
     el.innerHTML = lines.join('\n');
+    // linha da média: overlay POR CIMA das barras (não altera o ASCII).
+    // baseline (valor 0) fica na base da linha y=1 => (H+1)*LH; sobe a*H/max linhas.
+    if (a > 0){
+      const top  = (H+1 - (a/max)*H) * LH;
+      const left = 9*CW;                         // gutter (eixo) = 9 colunas
+      const wpx  = days.length*colW*CW;
+      const ov = document.createElement('div');
+      ov.className = 'avgline';
+      ov.style.cssText = `top:${top}px;left:${left}px;width:${wpx}px`;
+      ov.innerHTML = `<span class="avglbl">média ${esc(fmtUs(a))}</span>`;
+      el.appendChild(ov);
+    }
   };
   const store = () => {
     animStore['scale:daily'] = newMax;
+    animStore['avg:daily'] = avg;
     days.forEach(d => animStore['day:'+d.date] = d.cost);
   };
   if (anim) animateChart('daily', ANIM_MS, render, store);
